@@ -1,0 +1,2 @@
+# Isolated bridge environment; renderer is built against the host's Qt.
+pyte==0.8.2

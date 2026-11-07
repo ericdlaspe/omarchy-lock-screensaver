@@ -1,0 +1,47 @@
+Omarchy Lock Screensaver
+Copyright (c) 2026 Eric Laspe
+New project code is distributed under the MIT License in LICENSE.
+
+Omarchy attribution
+-------------------
+This is an independent, unofficial plugin for Omarchy. It is not an official
+Omarchy product, endorsement, or audited lock implementation.
+
+Production lock runtimes are generated locally from the user's installed
+Omarchy stock lock sources. The project does not vendor a production copy of
+the stock lock or its authentication implementation. Generated copies remain
+derivative copies of Omarchy: retain all original copyright/license headers,
+notices, and attribution of the installed version's maintainers. The project
+copyright above does not replace theirs. Dependency licenses remain with
+their respective owners.
+
+Limited stock-lock files in tests/fixtures/current-stock are compatibility
+fixtures only, not the source used to generate an installed production lock.
+Their accompanying attribution identifies Copyright (c) 2025 Basecamp, LLC.
+These fixture copies and locally generated Omarchy-derived sources are
+covered by the upstream MIT permission notice below, in addition to any
+notices supplied with the installed version.
+
+Upstream Omarchy MIT notice
+--------------------------
+Copyright (c) David Heinemeier Hansson
+Copyright (c) 2025 Basecamp, LLC. (compatibility fixture attribution)
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

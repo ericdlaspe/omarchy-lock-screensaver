@@ -1,0 +1,4 @@
+Fixtures copied from Omarchy 4.5.0-3 stock lock plugin for structural compatibility tests.
+Copyright (c) David Heinemeier Hansson and (c) 2025 Basecamp, LLC.
+MIT License: see the complete upstream permission notice in project NOTICE.
+Production generation always reads the installed stock plugin, never these fixtures.

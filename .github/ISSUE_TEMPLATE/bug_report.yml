@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a non-security installation, visual, or performance problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose lock bypasses, passwords, key events, tokens, or sensitive logs here.
+        For security concerns, follow [SECURITY.md](https://github.com/ericdlaspe/omarchy-lock-screensaver/blob/main/SECURITY.md).
+        Never reload or edit the plugin while locked just to reproduce a bug.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safe public report
+      options:
+        - label: This report contains no security exploit details, credentials, or private screen contents.
+          required: true
+        - label: I checked existing issues and read the README's limitations.
+          required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Versions and display environment
+      description: Include project revision, Omarchy, Qt, Quickshell, ttfx, GPU, display resolution/scaling/count, and any nondefault installer options. Redact personal paths.
+      placeholder: "Project revision: …\nOmarchy: …\nQt / Quickshell / ttfx: …\nGPU / displays / scaling: …\nInstaller options: …"
+    validations:
+      required: true
+  - type: dropdown
+    id: context
+    attributes:
+      label: Where does the problem happen?
+      options:
+        - Install / update / uninstall while unlocked
+        - Preview only
+        - Real manual lock
+        - Real automatic lock
+        - Both preview and real lock
+        - Build / unit / offscreen tests
+        - Other / unknown
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: What commands/actions did you take? Was the runtime regenerated after the most recent Omarchy update? Do not include private authentication details.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual behavior
+      description: For FPS, distinguish target from measured FPS and include sampling method. For blanking, distinguish configured interval from elapsed time actually observed.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics or screenshots
+      description: Optional status/test output or focused captures. Review all output for usernames, private paths, tokens, and sensitive content before posting. Never include passwords or full private configuration.
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround and additional context
+      description: Include only recovery actions already performed safely while unlocked; do not disrupt a live secure lock to gather evidence.

@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an animation, usability, compatibility, or documentation improvement.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep authentication with Omarchy's stock lock. Requests must not bypass locking or forward password/key input to the animation.
+        Report security concerns through [SECURITY.md](https://github.com/ericdlaspe/omarchy-lock-screensaver/blob/main/SECURITY.md), not this public form.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I searched existing issues and this request does not disclose a vulnerability or credentials.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the user need and relevant environment, without personal or sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the visible behavior and any configuration, performance, compatibility, or recovery implications.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: verification
+    attributes:
+      label: How could it be verified safely?
+      description: Separate headless/preview checks from any real-lock testing that needs an unlocked local setup first.

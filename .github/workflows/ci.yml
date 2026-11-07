@@ -1,0 +1,48 @@
+name: CI
+
+'on':
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arch-tests:
+    name: Arch Linux unit / native offscreen tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: archlinux:base
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+    steps:
+      # Git must exist before checkout; upgrade Arch as a complete transaction.
+      - name: Install build and test dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            ca-certificates git base-devel qt6-base qt6-declarative \
+            python python-pyte pkgconf ttf-dejavu
+
+      - name: Check out repository
+        # Official actions/checkout v4 tag SHA verified with the GitHub API.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run unit, native build, and offscreen tests
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/qt-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          ./bin/test

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Build one immutable generation; never overwrite a library mapped by Qt.
+set -euo pipefail
+if [[ $# != 1 ]]; then
+  printf 'Usage: %s OUTPUT_MODULE_DIRECTORY\n' "$0" >&2
+  exit 2
+fi
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+mkdir -p -- "$1"
+output_dir=$(cd -- "$1" && pwd -P)
+if [[ -e "$output_dir/liblocksaver.so" || -L "$output_dir/liblocksaver.so" ||
+      -e "$output_dir/qmldir" || -L "$output_dir/qmldir" ]]; then
+  printf 'Refusing to overwrite native module; choose a new generation directory: %s\n' "$output_dir" >&2
+  exit 1
+fi
+for command in qmake6 make; do
+  command -v "$command" >/dev/null || { printf 'Missing build dependency: %s\n' "$command" >&2; exit 1; }
+done
+# Stage beside the destination so hard-link publication cannot replace an
+# existing .so, even if two builders race. No paths are baked into the module.
+build_dir=$(mktemp -d "$(dirname -- "$output_dir")/.locksaver-build.XXXXXXXX")
+trap 'rm -rf -- "$build_dir"' EXIT
+(
+  cd -- "$build_dir"
+  qmake6 "$source_dir/native/locksaver.pro"
+  make -j"${JOBS:-2}"
+)
+ln -- "$build_dir/module/liblocksaver.so" "$output_dir/liblocksaver.so"
+cp -- "$source_dir/native/qmldir" "$build_dir/qmldir"
+ln -- "$build_dir/qmldir" "$output_dir/qmldir"
+printf 'Built LockSaver module: %s\n' "$output_dir"
