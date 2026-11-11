@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1 — idle prompt return
+
+- Return to the animation after 30 seconds without lock-screen input, clearing unfinished password and failure text without unlocking or waking the display.
+- Share activity across lock surfaces so a quiet output cannot clear another output's active password prompt. Pause the countdown during password authentication.
+- Refuse conflicting prompt identifiers and unsupported activity-wiring shapes before generating a runtime.
+- Run functional Qt QML timer tests in the existing native test harness, including CI without Quickshell.
+- The live lock is not updated by publishing a release. Install/update locally while unlocked and repeat real lock/unlock/wake verification. Physical multi-monitor and PAM behavior remain outside the isolated test evidence.
+
 ## v0.1.0 — initial beta
 
 ### Added

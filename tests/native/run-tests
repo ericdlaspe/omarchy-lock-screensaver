@@ -16,4 +16,5 @@ export LOCKSAVER_MODULE_URL
 LOCKSAVER_MODULE_URL=$("$python" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).as_uri())' "$generation/module")
 QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QSG_RHI_BACKEND=software \
   QSG_RENDER_LOOP=basic "$generation/tests/renderer-test" -nocrashhandler
+export LOCKSAVER_QML_RUNNER="$generation/tests/renderer-test"
 "$python" -m unittest discover -s "$root/tests" -v

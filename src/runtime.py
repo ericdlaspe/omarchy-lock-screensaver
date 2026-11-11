@@ -55,6 +55,30 @@ _SAVER = ("\n    SecureSaver {\n"
           "    }\n")
 
 
+_PROMPT_TIMEOUT = '''
+  // Service activity is shared across all outputs. A second screen must not
+  // clear a password while the user is active on another screen.
+  property int promptActivitySerial: 0
+  onPromptActivitySerialChanged: {
+    if (inputEnabled && saverDismissed && !authenticatingPassword) promptIdleTimer.restart()
+  }
+
+  Timer {
+    id: promptIdleTimer
+    interval: 30000
+    repeat: false
+    running: root.inputEnabled && root.saverDismissed && !root.authenticatingPassword
+    onTriggered: {
+      if (!root.inputEnabled || root.authenticatingPassword) return
+      root.passwordTextEdited("")
+      root.clearFailureRequested()
+      root.saverDismissed = false
+    }
+  }
+
+'''
+
+
 def _require_one(text: str, marker: str, label: str) -> None:
     if text.count(marker) != 1:
         raise ValueError(f"Unsupported stock {label}: missing or ambiguous {marker.strip()!r}")
@@ -156,7 +180,9 @@ def _patch_service(source: str, blank_seconds: int) -> tuple[str, str]:
         raise ValueError("Unsupported stock: ambiguous idle timer properties")
     session = structure.object_id("sessionLock", "WlSessionLock", structure.root)
     surface = structure.object_id("lockSurface", "WlSessionLockSurface", session)
-    structure.object_id("lockView", "LockView", surface)
+    lock_view = structure.object_id("lockView", "LockView", surface)
+    structure.at("  function runWake() {\n", structure.root)
+    structure.at("        passwordText: root.enteredPassword\n", lock_view)
     structure.object_id("passwordPam", "PamContext", structure.root)
     structure.at("    id: idleBlankTimer\n", timer)
     preview_window = structure.object_id("previewWindow", "PanelWindow", structure.root)
@@ -188,6 +214,10 @@ def _patch_service(source: str, blank_seconds: int) -> tuple[str, str]:
             raise ValueError("Unsupported stock: idle timer interval scope changed")
         source = source[:position] + f"    interval: {blank_seconds * 1000}\n" + source[position + len(interval):]
         compatibility = "interval"
+    source = source.replace("  function runWake() {\n",
+        "  property int promptActivitySerial: 0\n\n  function runWake() {\n    promptActivitySerial += 1\n")
+    source = source.replace("        passwordText: root.enteredPassword\n",
+        "        passwordText: root.enteredPassword\n        promptActivitySerial: root.promptActivitySerial\n")
     source = source.replace(_PREVIEW, _PREVIEW.replace("      loadBackground:", "      previewSaver: true\n      loadBackground:"))
     return source, compatibility
 
@@ -210,6 +240,8 @@ def _patch_view(source: str) -> str:
         structure.at(marker, (structure.root if index < 4 else field if index == 4 else password))
     for marker, replacement in _VIEW_EDITS:
         source = source.replace(marker, replacement)
+    source = source.replace("  function forcePasswordFocus() {\n",
+                            _PROMPT_TIMEOUT + "  function forcePasswordFocus() {\n")
     return source.removesuffix("  }\n}\n") + _SAVER + "  }\n}\n"
 
 
@@ -287,7 +319,7 @@ def generate_runtime(stock_dir: Path, output_dir: Path, saver_template: Path, *,
                 "fps": fps, "blank_seconds": blank_seconds, "metrics": metrics}
     for name in ("Service.qml", "LockView.qml"):
         source = files[Path(name)].decode("utf-8")
-        if re.search(r"\b(?:SecureSaver|saverActive|saverDismissed|previewSaver|dismissSaver)\b", source):
+        if re.search(r"\b(?:SecureSaver|saverActive|saverDismissed|previewSaver|dismissSaver|promptIdleTimer|promptActivitySerial|onPromptActivitySerialChanged)\b", source):
             raise ValueError(f"Stock {name} is already patched or has conflicting saver identifiers")
     service, compatibility = _patch_service(files[Path("Service.qml")].decode("utf-8"), blank_seconds)
     files[Path("Service.qml")] = service.encode("utf-8")

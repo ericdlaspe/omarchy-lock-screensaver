@@ -8,6 +8,8 @@
 #include <QQmlComponent>
 #include <QQuickWindow>
 #include <QThread>
+#include <QTimer>
+#include <QDebug>
 #include <atomic>
 #include <thread>
 #include "../../native/renderer.h"
@@ -130,6 +132,23 @@ private slots:
 
 int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);
+    // Execute the exact generated prompt fragment without Quickshell or a
+    // compositor, so the functional timer checks also run in Arch CI.
+    if (argc == 3 && QByteArray(argv[1]) == "--qml-test") {
+        QQmlEngine engine;
+        bool failed = false;
+        QObject::connect(&engine, &QQmlEngine::warnings, &app, [&](const QList<QQmlError> &errors) {
+            failed = true;
+            for (const auto &error : errors) qWarning() << error.toString();
+            app.exit(1);
+        });
+        QObject::connect(&engine, &QQmlEngine::quit, &app, [&]() { app.exit(failed ? 1 : 0); });
+        QQmlComponent component(&engine, QUrl::fromLocalFile(QString::fromLocal8Bit(argv[2])));
+        QScopedPointer<QObject> object(component.create());
+        if (!object || failed) { qWarning() << component.errorString(); return 1; }
+        QTimer::singleShot(8000, &app, [&]() { app.exit(2); });
+        return app.exec();
+    }
     RendererTest test;
     return QTest::qExec(&test, argc, argv);
 }

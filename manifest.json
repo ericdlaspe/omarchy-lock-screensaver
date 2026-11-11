@@ -2,15 +2,21 @@
   "schemaVersion": 1,
   "id": "ericdlaspe.lock-screensaver",
   "name": "Lock Screensaver",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Eric Laspe",
   "license": "MIT",
   "description": "The real Omarchy terminal effects inside the secure session lock, with a configurable display-off delay.",
   "omarchy": {
     "clonedFrom": "omarchy.lock",
-    "capabilities": ["authentication"]
+    "capabilities": [
+      "authentication"
+    ]
   },
-  "kinds": ["service"],
+  "kinds": [
+    "service"
+  ],
   "keepLoaded": true,
-  "entryPoints": {"service": "Service.qml"}
+  "entryPoints": {
+    "service": "Service.qml"
+  }
 }

@@ -4,13 +4,14 @@
 
 The actual Omarchy `ttfx` effects, painted across the secure lock screen. This is a **lock-screen plugin**, not a standalone screensaver or a replacement authentication system.
 
-**Beta · v0.1.0 · MIT · unofficial and not security-audited.** Review the code before installing: Omarchy plugins run as your user inside the shell.
+**Beta · v0.1.1 · MIT · unofficial and not security-audited.** Review the code before installing: Omarchy plugins run as your user inside the shell.
 
-[Source](https://github.com/ericdlaspe/omarchy-lock-screensaver) · [v0.1.0 release / downloads](https://github.com/ericdlaspe/omarchy-lock-screensaver/releases/tag/v0.1.0) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Source](https://github.com/ericdlaspe/omarchy-lock-screensaver) · [v0.1.1 release / downloads](https://github.com/ericdlaspe/omarchy-lock-screensaver/releases/tag/v0.1.1) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## What it does
 
 - Displays the real `ttfx` animation with screen-sized effects on manual and automatic secure lock.
+- Returns to the animation after 30 seconds without lock-screen input, clearing unfinished password and failure text. Activity is synchronized across outputs, and the countdown pauses during password authentication. Returning to the animation does not wake the display or restart its display-off timer.
 - Keeps the installed Omarchy lock's session-lock and PAM/authentication behavior. There is **no authentication bypass**: dismissing the animation or waking the display does not unlock the session.
 - Uses a Python terminal-frame bridge and native Qt painting, with a configurable **60 FPS target** by default. It is CPU work, not a promise of free rendering or a minimum frame rate.
 - Configures locked-screen display blanking to **30 minutes** by default. Change it explicitly with `--blank-minutes`; this is separate from when the screensaver starts or the session locks.
@@ -121,7 +122,7 @@ The default is a **60 FPS target**, not a guaranteed 60 FPS or even a global 30 
 
 Development observations on one host used Omarchy **4.5.0-3**, Qt **6.12.0-3**, Quickshell **0.3.2**, and `ttfx` **0.5.0**. Full-screen rendering measured about **45 FPS** in three five-second samples; a limited central grid measured about **59 FPS**. These are hardware-specific observations, not benchmarks for every machine or effect. A slow preview is not a measurement of the real secure lock.
 
-The display-off interval is configured to 30 minutes by default. Configuration inspection is **not** proof that a full 30-minute locked interval and wake cycle have been observed. Likewise, headless/offscreen tests cannot prove compositor session-lock security, real password/PAM interaction, multi-monitor behavior, or physical display blanking. Verify manual lock, automatic lock, password unlock, and wake behavior locally before relying on this beta.
+The display-off interval is configured to 30 minutes by default. Configuration inspection is **not** proof that a full 30-minute locked interval and wake cycle have been observed. The 30-second prompt return and cross-output activity synchronization have isolated Qt tests; this version has not received a new physical multi-monitor or real PAM/unlock test. Likewise, headless/offscreen tests cannot prove compositor session-lock security, real password/PAM interaction, multi-monitor behavior, or physical display blanking. Verify manual lock, automatic lock, password unlock, and wake behavior locally before relying on this beta.
 
 ## Tests and contributing
 
@@ -129,7 +130,7 @@ The display-off interval is configured to 30 minutes by default. Configuration i
 ./bin/test
 ```
 
-The test entry point covers Python unit tests, native build, and offscreen renderer tests. It does not install the plugin or replace local secure-lock testing. CI is configured to run that entry point in an Arch Linux container; a workflow file is not a claim that a remote run has passed. See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and safe testing rules.
+The test entry point covers Python unit tests, native build, offscreen renderer tests, and isolated Qt QML prompt-timer tests. The prompt tests run in CI without requiring Quickshell, including shared activity across two simulated outputs, repeated timeout cycles, disabled input, and authentication pause/resume. These are simulated output tests, not physical multi-monitor validation. It does not install the plugin or replace local secure-lock testing. CI is configured to run that entry point in an Arch Linux container; a workflow file is not a claim that a remote run has passed. See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and safe testing rules.
 
 For ordinary bugs, use the repository's issue forms and include redacted versions, display details, reproduction steps, and whether the issue occurs in preview or real lock. Do not post passwords, full private configuration, or unredacted desktop captures. For authentication, input disclosure, or lock-bypass concerns, follow [SECURITY.md](SECURITY.md), not a public bug report.
 

@@ -48,8 +48,12 @@ class RuntimeTests(unittest.TestCase):
         expected = original.replace(b"readonly property int idleMs: 5000", b"readonly property int idleMs: 90000").replace(
             b"      inputEnabled: false\n      loadBackground: root.previewVisible",
             b"      inputEnabled: false\n      previewSaver: true\n      loadBackground: root.previewVisible")
+        expected = expected.replace(b"  function runWake() {\n",
+            b"  property int promptActivitySerial: 0\n\n  function runWake() {\n    promptActivitySerial += 1\n").replace(
+            b"        passwordText: root.enteredPassword\n",
+            b"        passwordText: root.enteredPassword\n        promptActivitySerial: root.promptActivitySerial\n")
         self.assertEqual((self.output / "Service.qml").read_bytes(), expected)
-        # Every byte outside the two visual/timing edits, including all PAM,
+        # Every byte outside the visual/timing/activity edits, including all PAM,
         # fingerprint, lock, unlock, and password functions, is unchanged.
 
     def test_lock_view_saver_retains_focused_password_input_and_original_handlers(self):
@@ -90,12 +94,16 @@ class RuntimeTests(unittest.TestCase):
         expected = original.replace(b"    interval: 5000\n", b"    interval: 60000\n").replace(
             b"      inputEnabled: false\n      loadBackground: root.previewVisible",
             b"      inputEnabled: false\n      previewSaver: true\n      loadBackground: root.previewVisible")
+        expected = expected.replace(b"  function runWake() {\n",
+            b"  property int promptActivitySerial: 0\n\n  function runWake() {\n    promptActivitySerial += 1\n").replace(
+            b"        passwordText: root.enteredPassword\n",
+            b"        passwordText: root.enteredPassword\n        promptActivitySerial: root.promptActivitySerial\n")
         self.assertEqual((self.output / "Service.qml").read_bytes(), expected)
         self.assertEqual(metadata["compatibility"], "interval")
 
     def test_missing_or_ambiguous_patch_markers_fail_closed(self):
         markers = {
-            "Service.qml": ["    id: idleBlankTimer\n", "    readonly property int idleMs: 5000\n", "    interval: idleMs\n", "      inputEnabled: false\n      loadBackground: root.previewVisible\n"],
+            "Service.qml": ["    id: idleBlankTimer\n", "    readonly property int idleMs: 5000\n", "    interval: idleMs\n", "      inputEnabled: false\n      loadBackground: root.previewVisible\n", "  function runWake() {\n", "        passwordText: root.enteredPassword\n"],
             "LockView.qml": ["  property bool loadBackground: true\n", "  property bool syncingPasswordText: false\n", "  onPasswordTextChanged: syncPasswordText()\n", "  onInputEnabledChanged: {\n    if (inputEnabled) Qt.callLater(forcePasswordFocus)\n  }", "      id: inputField\n", "        Keys.onPressed: function(event) {\n"],
         }
         originals = {name: (self.stock / name).read_bytes() for name in markers}
@@ -110,6 +118,40 @@ class RuntimeTests(unittest.TestCase):
                             self.generate()
                         self.assertFalse(self.output.exists())
                         (self.stock / name).write_bytes(originals[name])
+
+    def test_prompt_timeout_conflicts_fail_before_writing_output(self):
+        cases = (
+            '  onPromptActivitySerialChanged: console.log("upstream handler")\n',
+            '  property int promptActivitySerial: 0\n',
+            '  Timer { id: promptIdleTimer; interval: 1000 }\n',
+        )
+        path = self.stock / "LockView.qml"
+        original = path.read_text(encoding="utf-8")
+        for index, addition in enumerate(cases):
+            with self.subTest(addition=addition):
+                self.output = self.root / f"prompt-conflict-{index}"
+                path.write_text(original.replace("  function forcePasswordFocus() {\n",
+                    addition + "  function forcePasswordFocus() {\n"), encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(ValueError, "Unsupported stock|conflicting saver"):
+                        self.generate()
+                    self.assertFalse(self.output.exists())
+                finally:
+                    path.write_text(original, encoding="utf-8")
+
+    def test_generated_prompt_timeout_is_unique_and_does_not_authenticate(self):
+        self.generate()
+        view = (self.output / "LockView.qml").read_text(encoding="utf-8")
+        self.assertEqual(view.count("id: promptIdleTimer"), 1)
+        self.assertEqual(view.count("onPromptActivitySerialChanged:"), 1)
+        timer = view.split("    id: promptIdleTimer", 1)[1].split("  function forcePasswordFocus", 1)[0]
+        self.assertIn("interval: 30000", timer)
+        self.assertIn("!root.authenticatingPassword", timer)
+        self.assertIn('root.passwordTextEdited("")', timer)
+        self.assertIn("root.clearFailureRequested()", timer)
+        self.assertNotIn("wakeRequested()", timer)
+        self.assertNotIn("submitPassword", timer)
+        self.assertNotIn("unlock", timer.lower())
 
     def test_template_missing_ambiguous_unknown_or_prequoted_tokens_fail_closed(self):
         cases = [TEMPLATE + "\n@@UNKNOWN@@\n", TEMPLATE.replace("@@PYTHON@@", '"prefix @@PYTHON@@ suffix"'), TEMPLATE.replace("@@BRIDGE@@", "/* @@BRIDGE@@ */")]
@@ -153,6 +195,7 @@ class RuntimeTests(unittest.TestCase):
             ("LockView.qml", "import QtQuick\n", "import QtQuick\n  property bool saverDismissed: false\n"),
             ("LockView.qml", "import QtQuick\n", "import QtQuick\n  function dismissSaver() {}\n"),
             ("Service.qml", "import QtQuick\n", "import QtQuick\n// SecureSaver custom patched source\n"),
+            ("Service.qml", "  id: root", "  id: root\n  property int promptActivitySerial: 0"),
             ("LockView.qml", "  id: root", "  id: root\n  property string bad: `unfamiliar ${template}`"),
             ("LockView.qml", "import QtQuick\n", "import QtQuick\n}\n"),
         ]
@@ -271,6 +314,10 @@ class RuntimeTests(unittest.TestCase):
         expected = original.replace(b"readonly property int idleMs: 5000", b"readonly property int idleMs: 30000").replace(
             b"      inputEnabled: false\n      loadBackground: root.previewVisible",
             b"      inputEnabled: false\n      previewSaver: true\n      loadBackground: root.previewVisible")
+        expected = expected.replace(b"  function runWake() {\n",
+            b"  property int promptActivitySerial: 0\n\n  function runWake() {\n    promptActivitySerial += 1\n").replace(
+            b"        passwordText: root.enteredPassword\n",
+            b"        passwordText: root.enteredPassword\n        promptActivitySerial: root.promptActivitySerial\n")
         self.assertEqual((self.output / "Service.qml").read_bytes(), expected)
         self.assertEqual(metadata["source_sha256"]["Service.qml"], hashlib.sha256(original).hexdigest())
 
