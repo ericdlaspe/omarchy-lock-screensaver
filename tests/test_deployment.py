@@ -684,13 +684,13 @@ class TransactionRegressionTests(unittest.TestCase):
     def test_failed_source_swap_does_not_restore_checkout_while_lock_is_pending(self):
         deployment.prepare_plugin_checkout(self.paths, self.project)
         (self.paths.plugin / "Service.qml").write_text("previous source")
-        replace = deployment.os.replace
+        replace = deployment.move_directory
         def fail_new_checkout(source, destination):
             if Path(source).name.startswith(".lock-screensaver-") and destination == self.paths.plugin:
                 self.lock_state["requested"] = True
                 raise OSError("source swap failed while lock was requested")
             return replace(source, destination)
-        with patch.object(deployment.os, "replace", side_effect=fail_new_checkout):
+        with patch.object(deployment, "move_directory", side_effect=fail_new_checkout):
             with self.assertRaises((OSError, installer.InstallError)):
                 self.install()
         self.assertFalse(self.paths.plugin.exists(), "Unsafe source rollback replaced a pending lock client")

@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Render a documented preview offscreen; never connect to the desktop/lock.
+
+Run with a Python that already provides pyte. No packages are downloaded.
+See docs/preview-provenance.md for the recipe, licenses, and limitations.
+"""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import fcntl
+import importlib.metadata
+import json
+import os
+import pty
+import select
+import signal
+import struct
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+from xml.sax.saxutils import escape
+
+ROOT = Path(__file__).resolve().parents[1]
+CPP = r'''
+#include <QGuiApplication>
+#include <QFontDatabase>
+#include <QFontInfo>
+#include <QFile>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPainter>
+#include <QtMath>
+#include <cstdio>
+#include "renderer.h"
+
+int main(int argc, char **argv) {
+    QGuiApplication app(argc, argv);
+    if (qEnvironmentVariable("QT_QPA_PLATFORM") != "offscreen") return 2;
+    constexpr int width = 1280, height = 720;
+    // Exactly the font-size/grid formula from qml/SecureSaver.qml.in.
+    const int fontSize = qMax(8, qMin(20, qMin(width / 105, height / 15)));
+    TerminalFrame frame;
+    frame.setWidth(width);
+    frame.setHeight(height);
+    frame.setCellFontSize(fontSize);
+    const int columns = qBound(40, qFloor((width - 4) / frame.cellWidth()), 300);
+    const int rows = qBound(16, qFloor((height - 4) / frame.cellHeight()), 120);
+    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    font.setStyleHint(QFont::TypeWriter);
+    font.setPixelSize(fontSize);
+    QJsonObject metadata{
+        {"width", width}, {"height", height}, {"font_pixels", fontSize},
+        {"columns", columns}, {"rows", rows},
+        {"cell_width", frame.cellWidth()}, {"cell_height", frame.cellHeight()},
+        {"font_family", QFontInfo(font).family()}, {"qt_version", qVersion()}
+    };
+    if (argc == 2 && QByteArray(argv[1]) == "--geometry") {
+        puts(QJsonDocument(metadata).toJson(QJsonDocument::Compact).constData());
+        return 0;
+    }
+    if (argc != 3) return 2;
+    QFile input(QString::fromLocal8Bit(argv[1]));
+    if (!input.open(QIODevice::ReadOnly)) return 3;
+    QJsonParseError error;
+    const auto document = QJsonDocument::fromJson(input.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isArray()) return 4;
+    frame.setRuns(document.array().toVariantList());
+    if (frame.runs().isEmpty()) return 5;
+    QImage image(width, height, QImage::Format_RGB32);
+    image.fill(Qt::black);
+    QPainter painter(&image);
+    frame.paint(&painter); // The production renderer, not a recreated drawing.
+    // Disclosure labels are added by this capture harness, not the lock UI.
+    painter.setFont(font);
+    painter.setPen(QColor("#a0a0a0"));
+    painter.drawText(32, 40, "OMARCHY LOCK SCREENSAVER");
+    painter.drawText(32, height - 50, "ISOLATED RENDERER PREVIEW");
+    painter.setPen(QColor("#707070"));
+    painter.drawText(32, height - 28,
+                     "ttfx colorshift / not a secure-lock screenshot");
+    painter.end();
+    if (!image.save(QString::fromLocal8Bit(argv[2]), "PNG")) return 6;
+    metadata["paint_count"] = static_cast<qint64>(frame.paintCount());
+    metadata["run_count"] = frame.runs().size();
+    puts(QJsonDocument(metadata).toJson(QJsonDocument::Compact).constData());
+    return 0;
+}
+'''
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def call(command, env, cwd=None, timeout=90):
+    result = subprocess.run(command, env=env, cwd=cwd, check=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=timeout)
+    return result.stdout
+
+
+def effect_output(command, env, columns, rows):
+    # Match the production bridge: an isolated PTY with the full grid size.
+    # This is not the user's terminal and has no compositor connection.
+    master, slave = pty.openpty()
+    process = None
+    chunks = []
+    total = 0
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", rows, columns, 0, 0))
+        process = subprocess.Popen(command, stdin=slave, stdout=slave,
+                                   stderr=subprocess.PIPE, env=env,
+                                   start_new_session=True)
+        os.close(slave)
+        slave = None
+        deadline = time.monotonic() + 30
+        while True:
+            if time.monotonic() > deadline:
+                raise RuntimeError("Effect exceeded the 30-second capture limit")
+            ready, _, _ = select.select([master], [], [], .1)
+            if not ready:
+                continue
+            try:
+                data = os.read(master, 65536)
+            except OSError as error:
+                if error.errno == 5:
+                    break
+                raise
+            if not data:
+                break
+            chunks.append(data)
+            total += len(data)
+            if total > 16 * 1024 * 1024:
+                raise RuntimeError("Effect output exceeded 16 MiB")
+        error = process.communicate(timeout=3)[1]
+        if process.returncode:
+            raise RuntimeError("ttfx failed: " + error.decode(errors="replace"))
+        return b"".join(chunks)
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=3)
+        os.close(master)
+        if slave is not None:
+            os.close(slave)
+
+
+def destination(value, replace):
+    path = Path(value).absolute()
+    if path.is_symlink():
+        raise ValueError("Refusing a symlink output: " + str(path))
+    if path.exists() and not replace:
+        raise ValueError("Output exists; use --replace explicitly: " + str(path))
+    if not path.parent.is_dir():
+        raise ValueError("Output parent must already exist: " + str(path.parent))
+    return path
+
+
+def publish(path, data):
+    # The temporary sibling is a new file. Replacing the directory entry does
+    # not follow an existing output symlink if it changes after validation.
+    fd, name = tempfile.mkstemp(prefix=".preview-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", required=True, help="New PNG path")
+    parser.add_argument("--mirror", help="Optional identical PNG copy")
+    parser.add_argument("--record", required=True, help="New JSON provenance path")
+    parser.add_argument("--replace", action="store_true",
+                        help="Explicitly replace the selected output files")
+    parser.add_argument("--font", default="/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf")
+    args = parser.parse_args()
+    targets = [destination(args.output, args.replace)]
+    if args.mirror:
+        targets.append(destination(args.mirror, args.replace))
+    record_path = destination(args.record, args.replace)
+    if len(set(targets + [record_path])) != len(targets) + 1:
+        raise ValueError("Output, mirror, and record paths must differ")
+    font = Path(args.font).resolve(strict=True)
+    logo = ROOT / "docs/preview-logo.txt"
+    executables = {name: shutil.which(name) for name in ("ttfx", "qmake6", "make")}
+    if not all(executables.values()):
+        raise RuntimeError("Required local commands: ttfx, qmake6, make")
+    # Import only definitions. bridge.main() is not called.
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(ROOT / "src"))
+    from bridge import TerminalDecoder, frame_runs
+
+    with tempfile.TemporaryDirectory(prefix="locksaver-preview-") as directory:
+        temp = Path(directory)
+        for name in ("home", "runtime", "cache", "config", "data", "fonts", "build"):
+            (temp / name).mkdir(mode=0o700)
+        shutil.copyfile(font, temp / "fonts/preview.ttf")
+        fontconfig = temp / "fonts.conf"
+        fontconfig.write_text('<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">'
+                              '<fontconfig><dir>' + escape(str(temp / "fonts")) +
+                              '</dir><cachedir>' + escape(str(temp / "cache")) +
+                              '</cachedir></fontconfig>\n')
+        # Deliberately do not inherit display, D-Bus, compositor, Qt plugin,
+        # user font, or user configuration environment variables.
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+               "HOME": str(temp / "home"), "XDG_RUNTIME_DIR": str(temp / "runtime"),
+               "XDG_CONFIG_HOME": str(temp / "config"), "XDG_CACHE_HOME": str(temp / "cache"),
+               "XDG_DATA_HOME": str(temp / "data"), "FONTCONFIG_FILE": str(fontconfig),
+               "FONTCONFIG_PATH": str(temp), "QT_QPA_PLATFORM": "offscreen",
+               "QT_QPA_PLATFORMTHEME": "", "QSG_RHI_BACKEND": "software",
+               "QSG_RENDER_LOOP": "basic", "QT_SCALE_FACTOR": "1",
+               "QT_ENABLE_HIGHDPI_SCALING": "0", "LC_ALL": "C.UTF-8",
+               "TERM": "xterm-256color"}
+        (temp / "capture.cpp").write_text(CPP)
+        quote = lambda path: '"' + str(path).replace('\\', '\\\\').replace('"', '\\"') + '"'
+        (temp / "capture.pro").write_text(
+            "QT += quick qml\nCONFIG += console c++17\nCONFIG -= app_bundle\n"
+            "TEMPLATE = app\nTARGET = capture\n"
+            "INCLUDEPATH += " + quote(ROOT / "native") + "\n"
+            "SOURCES += " + quote(temp / "capture.cpp") + " " + quote(ROOT / "native/renderer.cpp") + "\n"
+            "HEADERS += " + quote(ROOT / "native/renderer.h") + "\n")
+        call([executables["qmake6"], str(temp / "capture.pro")], env, temp / "build")
+        call([executables["make"], "-j2"], env, temp / "build")
+        capture = temp / "build/capture"
+        geometry = json.loads(call([str(capture), "--geometry"], env))
+        command = [executables["ttfx"], "-i", str(logo), "--frame-rate", "120",
+                   "--canvas-width", str(geometry["columns"]),
+                   "--canvas-height", str(geometry["rows"]),
+                   "--ignore-terminal-dimensions", "--reuse-canvas",
+                   "--anchor-canvas", "c", "--anchor-text", "c",
+                   "--seed", "0", "--no-eol", "--no-restore-cursor",
+                   "colorshift", "--cycles", "1", "--no-loop", "--skip-final-gradient",
+                   "--travel-direction", "horizontal"]
+        ansi = effect_output(command, env, geometry["columns"], geometry["rows"])
+        if not ansi or len(ansi) > 16 * 1024 * 1024:
+            raise RuntimeError("Unexpected effect output size")
+        decoder = TerminalDecoder(geometry["columns"], geometry["rows"])
+        decoder.feed(ansi, final=True)
+        runs = frame_runs(decoder.screen)
+        if not runs or not any(run[2] != "#000000" for run in runs):
+            raise RuntimeError("The effect did not produce a visible frame")
+        runs_bytes = json.dumps(runs, ensure_ascii=False, separators=(",", ":")).encode()
+        (temp / "frame.json").write_bytes(runs_bytes)
+        rendered = json.loads(call([str(capture), str(temp / "frame.json"), str(temp / "preview.png")], env))
+        if rendered["paint_count"] != 1:
+            raise RuntimeError("Expected exactly one production renderer paint")
+        png = (temp / "preview.png").read_bytes()
+        safe_command = command.copy()
+        safe_command[0], safe_command[2] = "ttfx", "docs/preview-logo.txt"
+        packages = ["omarchy", "ttfx", "qt6-base", "qt6-declarative", "ttf-jetbrains-mono-nerd-basic"]
+        package_versions = {}
+        for package in packages:
+            result = subprocess.run(["pacman", "-Q", package], env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if result.returncode == 0:
+                package_versions[package] = result.stdout.strip().split(" ", 1)[1]
+        record = {
+            "capture_utc": datetime.now(timezone.utc).isoformat(),
+            "kind": "isolated production TerminalFrame::paint to QImage; not a desktop/lock screenshot",
+            "selection": "final decoded terminal state after one finite seeded ttfx colorshift cycle",
+            "labels": "Capture-harness disclosures added after the renderer paint; not lock UI",
+            "effect_command": safe_command, "geometry": rendered,
+            "versions": {"python": sys.version.split()[0], "pyte": importlib.metadata.version("pyte"),
+                         "wcwidth": importlib.metadata.version("wcwidth"), **package_versions},
+            "sha256": {
+                "preview.png": hashlib.sha256(png).hexdigest(),
+                "docs/preview-logo.txt": sha(logo),
+                "scripts/capture-preview": sha(__file__),
+                "src/bridge.py": sha(ROOT / "src/bridge.py"),
+                "native/renderer.cpp": sha(ROOT / "native/renderer.cpp"),
+                "native/renderer.h": sha(ROOT / "native/renderer.h"),
+                "font_file": sha(font), "ttfx_executable": sha(executables["ttfx"]),
+                "effect_ansi": hashlib.sha256(ansi).hexdigest(),
+                "decoded_runs": hashlib.sha256(runs_bytes).hexdigest()
+            },
+            "privacy": "Only repository logo, pinned packaged font, effect output, and literal labels. No desktop, user branding, passwords, account names, or live configuration.",
+            "isolation": "Temporary HOME/XDG/fontconfig; QT_QPA_PLATFORM=offscreen; no display/D-Bus environment; no Quickshell, compositor, PAM, or lock process."
+        }
+        for target in targets:
+            publish(target, png)
+        publish(record_path, (json.dumps(record, indent=2, sort_keys=True) + "\n").encode())
+        print(json.dumps(record, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,5 @@
 """Transactional deployment; no installed authentication source is vendored."""
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -6,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -16,19 +18,211 @@ from installer import (PLUGIN_ID, IdlePause, InstallError, entry_id,
                        read_command_json, run_checked, ensure_unlocked)
 
 
-def atomic_bytes(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+@contextmanager
+def _parent_directory(path, *, create=False):
+    """Open every parent without following links, retaining the directory fd.
+
+    Linked configuration/XDG directories are deliberately unsupported. Do not
+    resolve them: that would silently authorize editing a different location.
+    """
+    path = Path(path).absolute()
+    if ".." in path.parts:
+        raise InstallError(f"Refusing a configuration path containing '..': {path}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(path.anchor, flags)
     try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        for part in path.parts[1:-1]:
+            try:
+                child = os.open(part, flags, dir_fd=directory)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, dir_fd=directory)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        yield directory, path.name
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        os.close(directory)
+
+
+def _regular_file(directory, name, path):
+    try:
+        state = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(state.st_mode):
+        raise InstallError(f"Refusing symbolic-link configuration/state file: {path}")
+    if not stat.S_ISREG(state.st_mode):
+        raise InstallError(f"Refusing non-regular configuration/state file: {path}")
+    if state.st_nlink != 1:
+        raise InstallError(f"Refusing hard-linked configuration/state file: {path}")
+    return state
+
+
+def _identity(state):
+    return None if state is None else (state.st_dev, state.st_ino, state.st_size,
+                                       state.st_mtime_ns, state.st_ctime_ns, state.st_mode,
+                                       state.st_nlink)
+
+
+def _verify_parent(path, directory):
+    with _parent_directory(path) as (current, _):
+        before, after = os.fstat(directory), os.fstat(current)
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise InstallError(f"Configuration parent changed; preserving your edit: {path}")
+
+
+def read_bytes(path):
+    """Read a single-link regular file without following leaf or parent links."""
+    path = Path(path)
+    try:
+        with _parent_directory(path) as (directory, name):
+            before = _regular_file(directory, name, path)
+            if before is None:
+                return None
+            # NONBLOCK also prevents a concurrent FIFO substitution from hanging.
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+            with os.fdopen(descriptor, "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                if _identity(opened) != _identity(before):
+                    raise InstallError(f"Configuration changed while opening; preserving your edit: {path}")
+                payload = stream.read()
+                after = os.fstat(stream.fileno())
+            _verify_parent(path, directory)
+            current = _regular_file(directory, name, path)
+            if _identity(after) != _identity(before) or _identity(current) != _identity(before):
+                raise InstallError(f"Configuration changed while reading; preserving your edit: {path}")
+            return payload
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise InstallError(f"Cannot safely read {path}; linked, non-directory, or inaccessible "
+                           "parents are unsupported") from error
+
+
+def atomic_bytes(path, payload):
+    """Replace only an unchanged regular file, never a detected link/special file.
+
+    Directory-relative operations keep a parent-path substitution from redirecting
+    writes. The final check/rename is not a filesystem compare-and-swap: other
+    editors must still avoid changing configuration concurrently.
+    """
+    path = Path(path)
+    try:
+        with _parent_directory(path, create=True) as (directory, name):
+            before = _regular_file(directory, name, path)
+            temporary = "." + name + "." + uuid.uuid4().hex
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(payload)
+                    if before is not None:
+                        os.fchmod(stream.fileno(), stat.S_IMODE(before.st_mode))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                _verify_parent(path, directory)
+                if _identity(_regular_file(directory, name, path)) != _identity(before):
+                    raise InstallError(f"Configuration changed before write; preserving your edit: {path}")
+                os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+    except OSError as error:
+        raise InstallError(f"Cannot safely write {path}; linked, non-directory, or inaccessible "
+                           "parents are unsupported") from error
+
+
+def remove_file(path):
+    """Remove only an unchanged regular file; preserve substituted links."""
+    path = Path(path)
+    try:
+        with _parent_directory(path) as (directory, name):
+            before = _regular_file(directory, name, path)
+            if before is None:
+                return
+            _verify_parent(path, directory)
+            if _identity(_regular_file(directory, name, path)) != _identity(before):
+                raise InstallError(f"Configuration changed before removal; preserving your edit: {path}")
+            os.unlink(name, dir_fd=directory)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise InstallError(f"Cannot safely remove {path}; linked, non-directory, or inaccessible "
+                           "parents are unsupported") from error
+
+
+
+def make_directory(path, *, mode=0o700, exist_ok=False):
+    """Create a directory without following an existing leaf or parent link."""
+    path = Path(path)
+    try:
+        with _parent_directory(path, create=True) as (directory, name):
+            _verify_parent(path, directory)
+            try:
+                os.mkdir(name, mode=mode, dir_fd=directory)
+            except FileExistsError:
+                current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if not exist_ok or not stat.S_ISDIR(current.st_mode):
+                    raise InstallError(f"Refusing existing linked/non-directory destination: {path}")
+    except OSError as error:
+        raise InstallError(f"Cannot safely create directory {path}; linked parents are unsupported") from error
+
+
+@contextmanager
+def operation_lock(path):
+    """Never follow a substituted install.lock, including a dangling link/FIFO."""
+    path = Path(path)
+    acquired = False
+    try:
+        with _parent_directory(path, create=True) as (directory, name):
+            before = _regular_file(directory, name, path)
+            flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+            if before is None:
+                flags |= os.O_CREAT | os.O_EXCL
+            descriptor = os.open(name, flags, 0o600, dir_fd=directory)
+            with os.fdopen(descriptor, "a") as lock:
+                opened = os.fstat(lock.fileno())
+                current = _regular_file(directory, name, path)
+                if (_identity(opened) != _identity(current)
+                        or (before is not None and _identity(opened) != _identity(before))):
+                    raise InstallError(f"Operation lock changed; preserving your edit: {path}")
+                _verify_parent(path, directory)
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                yield lock
+    except OSError as error:
+        if acquired:
+            raise
+        raise InstallError(f"Cannot safely acquire operation lock {path}; "
+                           "another operation or an unsupported path may be present") from error
+
+
+def move_directory(source, destination):
+    """Move an owned checkout/backup without following either parent chain."""
+    source, destination = Path(source), Path(destination)
+    with _parent_directory(source) as (source_dir, source_name):
+        with _parent_directory(destination, create=True) as (destination_dir, destination_name):
+            current = os.stat(source_name, dir_fd=source_dir, follow_symlinks=False)
+            if not stat.S_ISDIR(current.st_mode):
+                raise InstallError(f"Refusing linked/non-directory source: {source}")
+            try:
+                os.stat(destination_name, dir_fd=destination_dir, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise InstallError(f"Refusing to overwrite existing destination: {destination}")
+            _verify_parent(source, source_dir)
+            _verify_parent(destination, destination_dir)
+            os.replace(source_name, destination_name,
+                       src_dir_fd=source_dir, dst_dir_fd=destination_dir)
 
 
 def atomic_json(path, payload):
@@ -36,22 +230,18 @@ def atomic_json(path, payload):
 
 
 def read_json(path, default=None):
-    try:
-        return json.loads(Path(path).read_text())
-    except FileNotFoundError:
+    payload = read_bytes(path)
+    if payload is None:
         return default
-    except (OSError, ValueError) as error:
+    try:
+        return json.loads(payload)
+    except ValueError as error:
         raise InstallError(f"Cannot read valid JSON from {path}") from error
 
 
 def configuration_state(path):
-    """Check and back up the same configuration bytes, not two racing reads."""
-    try:
-        payload = Path(path).read_bytes()
-    except FileNotFoundError:
-        payload = None
-    except OSError as error:
-        raise InstallError(f"Cannot read configuration from {path}") from error
+    """Check and back up the same safe configuration bytes, not two racing reads."""
+    payload = read_bytes(path)
     try:
         config = json.loads(payload) if payload is not None else {}
     except ValueError as error:
@@ -59,6 +249,25 @@ def configuration_state(path):
     if not isinstance(config, dict):
         raise InstallError("shell.json must contain an object")
     return config, payload
+
+
+def preflight_paths(paths):
+    """Reject unsupported config/state/data paths before temporary idle changes."""
+    for path in (paths.shell_config, paths.active, paths.snapshot, paths.state / "install.lock"):
+        read_bytes(path)
+    # Check existing directory chains before builds, backups, or checkout copies.
+    # Missing directories are allowed and will be created by the real operation.
+    for path in (paths.data / "generations" / ".path-check",
+                 paths.state / "backups" / ".path-check",
+                 paths.plugin / "manifest.json"):
+        try:
+            with _parent_directory(path):
+                pass
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise InstallError(f"Cannot safely use {path.parent}; linked, non-directory, or "
+                               "inaccessible parents are unsupported") from error
 
 
 def active_locks(runner):
@@ -77,7 +286,7 @@ def prepare_plugin_checkout(paths, project, *, runner=None):
         manifest = read_json(paths.plugin / "manifest.json", {})
         if manifest.get("id") != PLUGIN_ID or (paths.plugin / ".git").exists():
             raise InstallError(f"{paths.plugin} is not our managed copy. Run its own bin/install instead")
-    paths.plugins.mkdir(parents=True, exist_ok=True)
+    make_directory(paths.plugins, mode=0o755, exist_ok=True)
     temporary = paths.plugins / (".lock-screensaver-" + uuid.uuid4().hex)
     previous = None
     try:
@@ -87,15 +296,15 @@ def prepare_plugin_checkout(paths, project, *, runner=None):
             ensure_unlocked(runner)
         if paths.plugin.exists():
             previous = paths.state / "backups" / ("source-" + uuid.uuid4().hex)
-            previous.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(paths.plugin, previous)
-        os.replace(temporary, paths.plugin)
+            make_directory(previous.parent, exist_ok=True)
+            move_directory(paths.plugin, previous)
+        move_directory(temporary, paths.plugin)
     except Exception as error:
         if previous is not None and previous.exists() and not paths.plugin.exists():
             if runner is None or not safe_to_rollback(runner):
                 raise InstallError("Source deployment failed while locked/unknown; do not reload the lock. "
                                    f"Recovery backup: {previous}") from error
-            os.replace(previous, paths.plugin)
+            move_directory(previous, paths.plugin)
         raise
     finally:
         if temporary.exists():
@@ -136,7 +345,7 @@ def build_generation(paths, options, project, runner):
 
 def restore_file(path, old_bytes):
     if old_bytes is None:
-        Path(path).unlink(missing_ok=True)
+        remove_file(path)
     else:
         atomic_bytes(path, old_bytes)
 
@@ -145,7 +354,7 @@ def persist_backup(paths, files, previous_checkout=None, *, backup=None):
     """Keep exact pre-write pointers and absence evidence for manual recovery."""
     if backup is None:
         backup = paths.state / "backups" / uuid.uuid4().hex
-        backup.mkdir(parents=True, mode=0o700)
+        make_directory(backup)
     for name, payload in files.items():
         restore_file(backup / name, payload)
     atomic_json(backup / "recovery.json", {
@@ -203,9 +412,8 @@ def install(paths, options, project, *, runner=subprocess.run, build=None):
     ensure_unlocked(runner)
     if not 15 <= options.fps <= 120 or not 30 <= options.blank_minutes * 60 <= 86400:
         raise InstallError("FPS must be 15–120 and display-off delay 0.5–1440 minutes")
-    original = read_json(paths.shell_config, {})
-    if not isinstance(original, dict):
-        raise InstallError("shell.json must contain an object")
+    preflight_paths(paths)
+    original, _ = configuration_state(paths.shell_config)
     previous = active_locks(runner)
     if previous and not options.replace_existing_lock:
         raise InstallError("An existing lock clone is active (" + ", ".join(previous)
@@ -224,9 +432,8 @@ def install(paths, options, project, *, runner=subprocess.run, build=None):
         manifest = read_json(paths.plugin / "manifest.json", {})
         if manifest.get("id") != PLUGIN_ID or (paths.plugin / ".git").exists():
             raise InstallError(f"Use the installed checkout: {paths.plugin}/bin/install")
-    paths.state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (paths.state / "install.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    make_directory(paths.state, exist_ok=True)
+    with operation_lock(paths.state / "install.lock"):
         with IdlePause(runner):
             metadata = (build or build_generation)(paths, options, project, runner)
             run_checked(["omarchy", "plugin", "validate", project], runner)
@@ -240,9 +447,9 @@ def install(paths, options, project, *, runner=subprocess.run, build=None):
             desired, commit_snapshot = enable_configuration(current, previous)
             if snapshot is not prior_snapshot:
                 snapshot = commit_snapshot
-            old_config = paths.shell_config.read_bytes() if paths.shell_config.exists() else None
-            old_active = paths.active.read_bytes() if paths.active.exists() else None
-            old_snapshot = paths.snapshot.read_bytes() if paths.snapshot.exists() else None
+            _, old_config = configuration_state(paths.shell_config)
+            old_active = read_bytes(paths.active)
+            old_snapshot = read_bytes(paths.snapshot)
             backup = persist_backup(paths, {"shell.json": old_config, "active.json": old_active,
                                             "uninstall.json": old_snapshot}, previous_checkout)
             config_committed = active_committed = snapshot_committed = False
@@ -283,28 +490,35 @@ def install(paths, options, project, *, runner=subprocess.run, build=None):
                 if not safe_to_rollback(runner):
                     raise InstallError("Activation failed while compositor state is locked/unknown. "
                                        f"Do not reload the lock. Recovery backup: {backup}") from error
-                if config_committed:
-                    restored = restore_configuration(read_json(paths.shell_config, {}), commit_snapshot)
-                    if old_config is None and not restored:
-                        paths.shell_config.unlink(missing_ok=True)
-                    else:
-                        atomic_json(paths.shell_config, restored)
-                if active_committed:
-                    restore_file(paths.active, old_active)
-                if snapshot_committed:
-                    restore_file(paths.snapshot, old_snapshot)
-                if previous_checkout is not None:
-                    if not safe_to_rollback(runner):
-                        raise InstallError("Rollback stopped while locked/unknown; do not replace the lock. "
-                                           f"Recovery backup: {backup}") from error
-                    failed = paths.state / "backups" / ("failed-source-" + uuid.uuid4().hex)
-                    os.replace(paths.plugin, failed)
-                    os.replace(previous_checkout, paths.plugin)
-                if config_committed:
-                    if not safe_to_rollback(runner):
-                        raise InstallError("Rollback stopped while locked/unknown; do not reload the lock. "
-                                           f"Recovery backup: {backup}") from error
-                    run_checked(["omarchy", "restart", "shell"], runner, timeout=90)
+                try:
+                    if config_committed:
+                        restored = restore_configuration(read_json(paths.shell_config, {}), commit_snapshot)
+                        if old_config is None and not restored:
+                            remove_file(paths.shell_config)
+                        else:
+                            atomic_json(paths.shell_config, restored)
+                    if active_committed:
+                        restore_file(paths.active, old_active)
+                    if snapshot_committed:
+                        restore_file(paths.snapshot, old_snapshot)
+                    if previous_checkout is not None:
+                        if not safe_to_rollback(runner):
+                            raise InstallError("Rollback stopped while locked/unknown; do not replace the lock. "
+                                               f"Recovery backup: {backup}") from error
+                        failed = paths.state / "backups" / ("failed-source-" + uuid.uuid4().hex)
+                        move_directory(paths.plugin, failed)
+                        move_directory(previous_checkout, paths.plugin)
+                    if config_committed:
+                        if not safe_to_rollback(runner):
+                            raise InstallError("Rollback stopped while locked/unknown; do not reload the lock. "
+                                               f"Recovery backup: {backup}") from error
+                        run_checked(["omarchy", "restart", "shell"], runner, timeout=90)
+                except (InstallError, OSError) as recovery_error:
+                    raise InstallError(f"Installation failed; rollback stopped: {recovery_error}. "
+                                       f"Recovery backup: {backup}") from error
+                if not config_committed:
+                    raise InstallError("Installation failed before configuration commit; edits preserved. "
+                                       f"Recovery backup: {backup}") from error
                 raise InstallError("Installation failed; prior configuration restored") from error
     return {"installed": True, "plugin": PLUGIN_ID, "fps": options.fps,
             "blankSeconds": metadata["blankSeconds"], "backup": str(backup)}
@@ -312,6 +526,7 @@ def install(paths, options, project, *, runner=subprocess.run, build=None):
 
 def uninstall(paths, options, *, runner=subprocess.run):
     ensure_unlocked(runner)
+    preflight_paths(paths)
     snapshot = read_json(paths.snapshot)
     if not snapshot:
         raise InstallError("No installation snapshot exists; refusing to guess your previous lock setup")
@@ -322,16 +537,15 @@ def uninstall(paths, options, *, runner=subprocess.run):
         raise InstallError("Lock selection changed since installation; another lock clone is active")
     if options.dry_run:
         return {"dryRun": True, "restores": snapshot["ids"], "keepsCheckoutAndBackups": True}
-    with (paths.state / "install.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with operation_lock(paths.state / "install.lock"):
         with IdlePause(runner):
             ensure_unlocked(runner)
             if set(active_locks(runner)) != previous:
                 raise InstallError("Lock selection changed during preparation; preserving your edit")
             current, old_config = configuration_state(paths.shell_config)
             restore_configuration(current, snapshot)
-            old_active = paths.active.read_bytes() if paths.active.exists() else None
-            old_snapshot = paths.snapshot.read_bytes() if paths.snapshot.exists() else None
+            old_active = read_bytes(paths.active)
+            old_snapshot = read_bytes(paths.snapshot)
             backup = persist_backup(paths, {"shell.json": old_config, "active.json": old_active,
                                             "uninstall.json": old_snapshot})
             config_committed = False
@@ -365,8 +579,8 @@ def uninstall(paths, options, *, runner=subprocess.run):
                 ensure_unlocked(runner)
                 run_checked(["omarchy", "restart", "shell"], runner, timeout=90)
                 wait_for_readiness(runner)
-                paths.active.unlink(missing_ok=True)
-                paths.snapshot.unlink()
+                remove_file(paths.active)
+                remove_file(paths.snapshot)
             except Exception as error:
                 if not config_committed or undo is None:
                     raise InstallError("Uninstall failed before configuration commit; edits preserved. "
@@ -374,13 +588,17 @@ def uninstall(paths, options, *, runner=subprocess.run):
                 if not safe_to_rollback(runner):
                     raise InstallError("Uninstall failed while locked/unknown; do not reload the lock. "
                                        f"Recovery backup: {backup}") from error
-                atomic_json(paths.shell_config, restore_configuration(read_json(paths.shell_config, {}), undo))
-                restore_file(paths.active, old_active)
-                restore_file(paths.snapshot, old_snapshot)
-                if not safe_to_rollback(runner):
-                    raise InstallError("Rollback stopped while locked/unknown; do not reload the lock. "
+                try:
+                    atomic_json(paths.shell_config, restore_configuration(read_json(paths.shell_config, {}), undo))
+                    restore_file(paths.active, old_active)
+                    restore_file(paths.snapshot, old_snapshot)
+                    if not safe_to_rollback(runner):
+                        raise InstallError("Rollback stopped while locked/unknown; do not reload the lock. "
+                                           f"Recovery backup: {backup}") from error
+                    run_checked(["omarchy", "restart", "shell"], runner, timeout=90)
+                except (InstallError, OSError) as recovery_error:
+                    raise InstallError(f"Uninstall failed; rollback stopped: {recovery_error}. "
                                        f"Recovery backup: {backup}") from error
-                run_checked(["omarchy", "restart", "shell"], runner, timeout=90)
                 raise InstallError("Uninstall failed; screensaver configuration restored") from error
     return {"uninstalled": True, "keepsCheckoutAndBackups": True,
             "message": "Previous lock restored; checkout and backups retained for reinstall/recovery"}

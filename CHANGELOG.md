@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.2 — configuration-path safety and documented preview
+
+- Refuse unsupported linked or nonregular configuration paths rather than silently replacing links or losing their relationship to managed dotfiles.
+- Recheck configuration paths before writes and recovery, with regression tests for link changes during installation and uninstall.
+- Replace the undocumented preview with a fresh isolated renderer capture, reproducible source, and explicit upstream attribution.
+- Document the installer’s configuration changes and consent boundary more clearly.
+- Release preparation does not update or reload the live lock. This remains an unofficial, unaudited beta.
+
 ## v0.1.1 — idle prompt return
 
 - Return to the animation after 30 seconds without lock-screen input, clearing unfinished password and failure text without unlocking or waking the display.

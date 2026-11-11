@@ -45,3 +45,80 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+Preview assets and capture tooling
+----------------------------------
+preview.png and docs/screensaver.png are identical fresh isolated renders made
+with scripts/capture-preview. Their inputs, exact versions, hashes, reproduction
+recipe, and limitations are documented in docs/preview-provenance.md and
+docs/preview-capture.json. They are not secure-lock screenshots.
+
+docs/preview-logo.txt is an unmodified copy of Omarchy v4.5.0 logo.txt:
+https://github.com/omacom/omarchy/blob/v4.5.0/logo.txt
+The upstream Omarchy copyright and complete MIT permission notice above apply
+to this copied input. Omarchy branding remains upstream material. This project
+does not claim to have created or exclusively own that branding.
+
+The new capture tooling and disclosure labels are covered by this project's
+MIT license. Third-party rights in the input artwork and dependencies remain
+with their respective owners. Merely running a program is not a claim that
+its source-code license automatically applies to its output.
+
+ttfx / TerminalTextEffects attribution
+--------------------------------------
+The preview uses the colorshift effect from ttfx v0.5.0:
+https://github.com/omacom/ttfx/tree/v0.5.0
+
+ttfx is a port of TerminalTextEffects (TTE).
+https://github.com/ChrisBuilds/terminaltexteffects
+MIT License, Copyright (c) 2023 ChrisBuilds
+
+As the upstream ttfx NOTICE explains, the effects, animation-engine design,
+and command-line interface originate in TerminalTextEffects; ttfx translates
+that work to Rust. Credit for the effects belongs upstream.
+https://github.com/omacom/ttfx/blob/v0.5.0/NOTICE
+
+The ttfx executable/source and TerminalTextEffects are not bundled in this
+project. The following notice is retained to credit the preview's effect source.
+
+MIT License
+
+Copyright (c) 2026 37signals / omacom-io
+Copyright (c) 2023 ChrisBuilds (TerminalTextEffects, from which this is ported)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Preview font attribution
+------------------------
+Rendered with JetBrainsMono Nerd Font Regular from Nerd Fonts:
+https://github.com/ryanoasis/nerd-fonts
+Copyright 2020 The JetBrains Mono Project Authors
+https://github.com/JetBrains/JetBrainsMono
+
+The installed font is licensed under the SIL Open Font License, Version 1.1:
+https://openfontlicense.org/open-font-license-official-text/
+No font files are bundled. The OFL states that its requirement for fonts to
+remain under that license does not apply to documents created using them.
+
+The exact packaged font copyright and full OFL text are retained in
+docs/preview-font-license.txt. Nerd Fonts' per-font source/credits:
+https://github.com/ryanoasis/nerd-fonts/blob/v3.5.1/patched-fonts/JetBrainsMono/README.md
+Only ASCII and U+2580/U+2584/U+2588 basic block characters are rendered in
+these previews; the additional Nerd Fonts icon-set glyphs are not used.

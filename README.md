@@ -1,12 +1,14 @@
-![Omarchy lock screensaver showing screen-sized ttfx effects](docs/screensaver.png)
+![Isolated preview of the screensaver renderer, not a secure-lock screenshot](preview.png)
+
+[Preview source, capture method, and attribution](docs/preview-provenance.md).
 
 # Omarchy Lock Screensaver
 
 The actual Omarchy `ttfx` effects, painted across the secure lock screen. This is a **lock-screen plugin**, not a standalone screensaver or a replacement authentication system.
 
-**Beta · v0.1.1 · MIT · unofficial and not security-audited.** Review the code before installing: Omarchy plugins run as your user inside the shell.
+**Beta · v0.1.2 · MIT · unofficial and not security-audited.** Review the code before installing: Omarchy plugins run as your user inside the shell.
 
-[Source](https://github.com/ericdlaspe/omarchy-lock-screensaver) · [v0.1.1 release / downloads](https://github.com/ericdlaspe/omarchy-lock-screensaver/releases/tag/v0.1.1) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Source](https://github.com/ericdlaspe/omarchy-lock-screensaver) · [v0.1.2 release / downloads](https://github.com/ericdlaspe/omarchy-lock-screensaver/releases/tag/v0.1.2) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## What it does
 
@@ -35,6 +37,8 @@ omarchy pkg add base-devel qt6-base qt6-declarative python-pyte pkgconf
 This expects an existing Omarchy installation with its working `quickshell` and `ttfx`. Build tools include `qmake6`, `make`, and a C++ compiler; Python needs `pyte` (Arch package `python-pyte`). The installer builds the native renderer locally. **Do not run the installer with `sudo`.** There is no automatic network installation with `pip`.
 
 The installer requires working Omarchy shell IPC and a positively verified unlocked compositor. It refuses SSH sessions and missing or ambiguous lock-state evidence rather than guessing. An existing custom lock is refused unless you explicitly choose `--replace-existing-lock`; inspect what you are replacing first.
+
+Running `bin/install` explicitly authorizes the documented lock-selection and runtime changes below; there is no additional interactive confirmation. `--dry-run` reports the plan without applying it. Replacing another enabled custom lock requires the additional `--replace-existing-lock` option.
 
 To inspect the proposed operation:
 
@@ -101,7 +105,11 @@ After an Omarchy update, rerun the installer while unlocked even if this reposit
 
 The plugin ID is `ericdlaspe.lock-screensaver`, cloning the role of `omarchy.lock`. Installation copies the installed stock lock into a versioned user runtime, applies guarded animation/display-timer edits, and builds the native renderer. Packaged files under `/usr/share/omarchy/` are not modified. User data/state paths respect `HOME` and XDG locations; there is no machine-specific username to edit.
 
-Only the lock selection is changed in shell configuration. The installer records backups/restoration state, merges against fresh configuration, and restores temporary idle suppression in cleanup even when installation fails. Restoration is verified; IPC failure is reported rather than silently treated as success. If automatic idle cannot be restored, do not leave the machine unattended: resolve that warning locally. The loader chooses the generated runtime at startup and falls back to the stock lock if a runtime is absent or cannot load; this is not a promise to recover from every process/compositor failure.
+Within `shell.json`, installation changes only the lock-related entries in `plugins`, `disabledPlugins`, and `cloneSourceRestores`; unrelated values are preserved. The file is serialized as JSON, so formatting can change. Installation also creates/updates this plugin’s managed source copy, generated runtime, activation pointer, and uninstall snapshot. Previous managed source copies are backed up; keep your own source edits in a Git checkout rather than the managed copy. The installer records backups/restoration state, merges against fresh configuration, and restores temporary idle suppression in cleanup even when installation fails. Restoration is verified; IPC failure is reported rather than silently treated as success. If automatic idle cannot be restored, do not leave the machine unattended: resolve that warning locally. The loader chooses the generated runtime at startup and falls back to the stock lock if a runtime is absent or cannot load; this is not a promise to recover from every process/compositor failure.
+
+The installer and uninstaller refuse symbolic links (including dangling links), hard-linked files, nonregular files, and linked parent directories in configuration/state paths. This includes linked XDG directories. As in earlier versions, `HOME` is canonicalized before constructing default paths; the checks apply to links still present in the resulting paths. They do not follow those links or convert them into ordinary files. `--dry-run` applies the same configuration-path checks. Keep your existing dotfile setup intact and review the refusal; no force-conversion option is provided. Normal file permission bits are preserved when replacing a file.
+
+Configuration reads and writes use no-follow, directory-relative operations and recheck for changes. These checks are not an atomic transaction with other editors or protection against hostile code running as your user. Do not change configuration or switch lock plugins concurrently with install/uninstall.
 
 Recovery backups live under `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-lock-screensaver/backups/`. The operation's result or activation-failure message identifies its backup directory. `recovery.json` records whether the prior configuration/runtime pointers existed and where an older managed source checkout was saved. Existing `shell.json`, `active.json`, and `uninstall.json` are backed up before pointer/configuration writes. Do not blindly copy a stale full `shell.json` over later edits. If lock state becomes pending, locked, or unknown, automatic rollback refuses to replace/reload the client; unlock locally and inspect the backup before recovery.
 
@@ -137,3 +145,13 @@ For ordinary bugs, use the repository's issue forms and include redacted version
 ## License and attribution
 
 New project code is MIT, copyright © 2026 Eric Laspe. Omarchy and its installed lock sources retain their upstream MIT notices and copyright holders. Production lock sources are generated locally from the installed package, not taken from the compatibility-test fixture. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the project license and upstream attribution.
+
+External dependencies are installed separately, not relicensed by this project or bundled as binaries:
+
+- [Omarchy](https://github.com/omacom/omarchy) and [ttfx](https://github.com/omacom/ttfx): upstream MIT notices apply. ttfx credits the TerminalTextEffects project; see [preview attribution](docs/preview-provenance.md).
+- [Quickshell](https://quickshell.org/): LGPL-3.0-only for the tested package.
+- [Qt](https://www.qt.io/licensing/): its LGPL/GPL/commercial licensing terms apply to the modules you install.
+- [pyte](https://github.com/selectel/pyte): LGPLv3.
+- Native build tools (`qmake6`, `make`, a C++ compiler, and `pkgconf`) keep their own distribution licenses. The installer downloads none of them.
+
+The new preview’s source art, font, effect, and capture-only dependencies are documented separately in [preview provenance](docs/preview-provenance.md).
