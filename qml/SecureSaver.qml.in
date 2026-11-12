@@ -9,6 +9,7 @@ Item {
   property bool active: false
   property string art: "OMARCHY"
   property var runs: []
+  property bool displayPowered: true
   property bool closing: false
   property int receivedFrames: 0
   property double previousPaintCount: 0
@@ -19,7 +20,7 @@ Item {
   readonly property int cellFontSize: Math.max(8, Math.min(20, Math.floor(width / 105), Math.floor(height / 15)))
   readonly property int columns: Math.max(40, Math.min(300, Math.floor((width - 4) / terminalRenderer.cellWidth)))
   readonly property int rows: Math.max(16, Math.min(120, Math.floor((height - 4) / terminalRenderer.cellHeight)))
-  readonly property bool shouldRun: active && visible && width > 0 && height > 0 && !closing
+  readonly property bool shouldRun: active && displayPowered && visible && width > 0 && height > 0 && !closing
   signal dismissed()
   visible: active
 
@@ -67,6 +68,37 @@ Item {
     }
   }
 
+  // DPMS does not hide the Wayland surface. Poll only while the saver is
+  // selected; stopping rendering must leave this low-frequency wake probe alive.
+  Timer {
+    interval: 2000
+    repeat: true
+    triggeredOnStart: true
+    running: root.active && !root.closing
+    onTriggered: if (!powerProbe.running) powerProbe.running = true
+  }
+
+  Process {
+    id: powerProbe
+    command: ["hyprctl", "-j", "monitors"]
+    stdout: StdioCollector { id: powerOutput; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 || !root.active || root.closing) return
+      try {
+        let monitors = JSON.parse(powerOutput.text)
+        if (!Array.isArray(monitors)) return
+        let screen = root.Window.window ? root.Window.window.screen : null
+        let name = screen ? screen.name : ""
+        let output = monitors.find(m => m.name === name)
+        // Each lock surface follows its own output. Preview/offscreen windows
+        // without a matching output follow whether any enabled output is lit.
+        root.displayPowered = output
+          ? !output.disabled && output.dpmsStatus === true
+          : monitors.some(m => !m.disabled && m.dpmsStatus === true)
+      } catch (error) { /* Preserve the last known state if IPC is unavailable. */ }
+    }
+  }
+
   FileView {
     path: (Quickshell.env("HOME") || "") + "/.config/omarchy/branding/screensaver.txt"
     watchChanges: true
@@ -111,7 +143,7 @@ Item {
   // unless explicitly requested; only three samples, without persistent logs.
   Timer {
     interval: 5000
-    running: root.metricsEnabled && root.active && root.sampleCount < 3
+    running: root.metricsEnabled && root.shouldRun && root.sampleCount < 3
     repeat: true
     onTriggered: {
       let now = Date.now()

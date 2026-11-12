@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ericdlaspe.lock-screensaver",
   "name": "Lock Screensaver",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "Eric Laspe",
   "license": "MIT",
   "description": "The real Omarchy terminal effects inside the secure session lock, with a configurable display-off delay.",

@@ -129,6 +129,69 @@ ShellRoot {
                     proc.terminate()
                     proc.communicate(timeout=4)
 
+    def test_output_power_stops_and_restarts_real_animation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            state = temp / "monitors.json"
+            def power(value):
+                state.write_text(json.dumps([{"name": "test-output", "dpmsStatus": value,
+                                              "disabled": False}]))
+            power(True)
+            executable = temp / "hyprctl"
+            executable.write_text("#!/bin/sh\ncat -- " + str(state) + "\n")
+            executable.chmod(0o755)
+            template = (ROOT / "qml/SecureSaver.qml.in").read_text()
+            for key, value in {
+                "PYTHON": json.dumps(sys.executable),
+                "BRIDGE": json.dumps(str(ROOT / "src/bridge.py")),
+                "RENDERER_URL": json.dumps(os.environ["LOCKSAVER_MODULE_URL"]),
+                "FPS": "60", "METRICS": "false",
+            }.items():
+                template = template.replace("@@" + key + "@@", value)
+            (temp / "SecureSaver.qml").write_text(template)
+            (temp / "shell.qml").write_text("""import QtQuick
+import Quickshell
+ShellRoot {
+  Window {
+    visible: true; width: 800; height: 600
+    SecureSaver { id: saver; anchors.fill: parent; active: true
+      onDisplayPoweredChanged: console.log("power-state", displayPowered, shouldRun)
+    }
+  }
+}
+""")
+            env = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QPA_PLATFORMTHEME": "",
+                   "XDG_RUNTIME_DIR": directory, "XDG_CACHE_HOME": directory,
+                   "PATH": directory + os.pathsep + os.environ["PATH"]}
+            proc = subprocess.Popen(["quickshell", "--no-color", "-p", directory],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+            def animations():
+                result = []
+                for pid in descendants(proc.pid):
+                    try:
+                        command = Path(f"/proc/{pid}/cmdline").read_bytes()
+                    except FileNotFoundError:
+                        continue
+                    if b"bridge.py" in command or b"ttfx" in command:
+                        result.append(pid)
+                return result
+            try:
+                time.sleep(1.5)
+                self.assertTrue(animations(), "animation did not start")
+                power(False)
+                time.sleep(3.5)
+                self.assertEqual(animations(), [], "animation survived DPMS off")
+                power(True)
+                time.sleep(2.5)
+                self.assertTrue(animations(), "animation did not resume")
+            finally:
+                proc.terminate()
+                output = proc.communicate(timeout=5)[0].decode(errors="replace")
+            self.assertIn("power-state false false", output)
+            self.assertIn("power-state true true", output)
+            self.assertNotIn("ReferenceError", output)
+            self.assertNotIn("TypeError", output)
+
     def test_fullscreen_geometry_real_ttfx_and_metrics(self):
         self.exercise(True)
 

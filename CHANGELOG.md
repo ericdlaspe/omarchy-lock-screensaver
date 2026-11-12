@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.3 — stop animation on powered-off displays
+
+- Stop the animation bridge, ttfx effect, frame delivery, and paint metrics while the corresponding output is DPMS-off. Clear cached frame runs.
+- Check output power every two seconds while the saver is selected, and restart animation when the output wakes. Each lock surface follows its own monitor.
+- Preserve the last known power state if compositor IPC fails. Password authentication and idle prompt timings are unchanged.
+
 ## v0.1.2 — configuration-path safety and documented preview
 
 - Refuse unsupported linked or nonregular configuration paths rather than silently replacing links or losing their relationship to managed dotfiles.

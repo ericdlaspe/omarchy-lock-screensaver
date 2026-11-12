@@ -6,11 +6,13 @@
 
 The actual Omarchy `ttfx` effects, painted across the secure lock screen. This is a **lock-screen plugin**, not a standalone screensaver or a replacement authentication system.
 
-**Beta · v0.1.2 · MIT · unofficial and not security-audited.** Review the code before installing: Omarchy plugins run as your user inside the shell.
+**Beta · v0.1.3 · MIT · unofficial and not security-audited.** Review the code before installing: Omarchy plugins run as your user inside the shell.
 
-[Source](https://github.com/ericdlaspe/omarchy-lock-screensaver) · [v0.1.2 release / downloads](https://github.com/ericdlaspe/omarchy-lock-screensaver/releases/tag/v0.1.2) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Source](https://github.com/ericdlaspe/omarchy-lock-screensaver) · [v0.1.3 release / downloads](https://github.com/ericdlaspe/omarchy-lock-screensaver/releases/tag/v0.1.3) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## What it does
+
+Display power saving: while the lock screensaver is selected, it checks Hyprland output power every two seconds. A powered-off output stops its animation bridge and effect and clears cached frames; waking it restarts animation. A small power-check process remains active at that interval. If compositor IPC fails, the last known state is retained.
 
 - Displays the real `ttfx` animation with screen-sized effects on manual and automatic secure lock.
 - Returns to the animation after 30 seconds without lock-screen input, clearing unfinished password and failure text. Activity is synchronized across outputs, and the countdown pauses during password authentication. Returning to the animation does not wake the display or restart its display-off timer.

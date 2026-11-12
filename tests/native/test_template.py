@@ -17,7 +17,7 @@ class TemplateTests(unittest.TestCase):
         self.assertIn('"--fps", String(root.targetFps)', text)
         self.assertIn("readonly property real targetFps: @@FPS@@", text)
         self.assertIn("readonly property bool metricsEnabled: @@METRICS@@", text)
-        self.assertIn("root.metricsEnabled && root.active", text)
+        self.assertIn("root.metricsEnabled && root.shouldRun", text)
         self.assertIn("interval: 100", text)
         self.assertIn("Component.onDestruction:", text)
         self.assertIn("Text.PlainText", text)
